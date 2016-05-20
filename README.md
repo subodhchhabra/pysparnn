@@ -4,19 +4,16 @@ Approximate Nearest Neighbor Search for Sparse Data in Python! This library is w
 Out of the box, PySparNN supports Cosine Distance (i.e. 1 - cosine_similarity).
 
 PySparNN benefits:
- * Designed to be efficent on sparse data (memory & cpu).
+ * Designed to be efficient on sparse data (memory & cpu).
  * Implemented leveraging existing python libraries (scipy & numpy).
  * Easily extended with other metrics: Manhattan, Euclidian, Jaccard, etc.
- * *beta* - Min, Max distance thresholds can be set at query time (not index time). Example: return the k closest items on the interval [0.8, 0.9] from a query point. 
+ * Max distance thresholds can be set at query time (not index time). I.e. return the k closest items no more than max_distance from the query point.
+ * *beta* - Min distance thresholds set at query time. This will return k items at least some min_disntance away from the query point. Note: Items returned are not likely to be the k **closest** items after the min_distance threshold. See 'How Pysparnn Works' for a more detailed description of this.
 
 If your data is NOT SPARSE - please consider [annoy](https://github.com/spotify/annoy). Annoy uses a similar-ish method and I am a big fan of it. As of this writing, annoy performs ~8x faster on their introductory example. 
 General rule of thumb - annoy performs better if you can get your data to fit into memory (as a dense vector).
 
-
-The most comparable library to PySparNN is scikit-learn's LSHForrest module. As of this writing, PySparNN is ~1.6x faster on the 20newsgroups dataset. A more robust benchmarking on sparse data is desired. [Here is the comparison.](https://github.com/facebookresearch/pysparnn/blob/master/examples/sparse_search_comparison.ipynb)
-
-Notes:
-* A future update may allow incremental insertions.
+The most comparable library to PySparNN is scikit-learn's LSHForrest module. As of this writing, PySparNN is ~2x faster on the 20newsgroups dataset. A more robust benchmarking on sparse data is desired. [Here is the comparison.](https://github.com/facebookresearch/pysparnn/blob/master/examples/sparse_search_comparison.ipynb)
 
 ## Example Usage
 ### Simple Example
@@ -33,7 +30,7 @@ features = csr_matrix(features)
 data_to_return = range(1000)
 cp = snn.ClusterIndex(features, data_to_return)
 
-cp.search(features[:5], k=1, return_metric=False)
+cp.search(features[:5], k=1, return_distance=False)
 >> [[0], [1], [2], [3], [4]]
 ```
 ### Text Example
@@ -50,30 +47,34 @@ data = [
 ]    
 
 # build a feature representation for each sentence
-def scentence2features(scentence):
-    features = dict()
-    for word in scentence.split():
-        features[word] = 1
-    return features
+def scentences2features(scentences):
+    features_list = []
+    for sentence in sentences:
+        features = dict()
+        for word in scentence.split():
+            features[word] = 1
+        features_list.append(features)
+    return features_list
 
-features_list = []
-for sentence in data:
-    features_list.append(scentence2features(sentence))
+features_list = scentences2features(data)
 
 dv = DictVectorizer()
 dv.fit(features_list)
+features_vec = dv.transform(features_list)
 
 # build the search index!
-cp = snn.ClusterIndex(dv.transform(features_list), data)
+cp = snn.ClusterIndex(features_vec, data)
 
 # search the index with a sparse matrix
-search_items = [
-    scentence2features('oh there'),
-    scentence2features('Play it again Frank')
+search_data = [
+    'oh there',
+    'Play it again Frank'
 ]
-search_items = dv.transform(search_items)
 
-cp.search(search_items, k=1, k_clusters=2, return_metric=False)
+search_features = scentences2features(search_data)
+search_features_vec = dv.transform(search_features)
+
+cp.search(search_features_vec, k=1, k_clusters=2, return_distance=False)
 >> [['oh hello there'], ['Play it again Sam']]
 
 ```
@@ -97,6 +98,11 @@ However! we can create a tree structure where the first level is O(sqrt(K)) and 
 We randomly pick sqrt(K) candidate items to be in the top level. Then -- each document in the full list of K documents is assigned to the closest candidate in the top level.
 
 This breaks up one O(K) search into two O(sqrt(K)) searches which is much much faster when K is big!
+
+This generalizes to h levels. The runtime becomes:
+    O(h * h_root(K))
+
+**Note on min_distance thresholds** - Each document is assigned to the closest candidate cluster. When we set min_distance we will filter out clusters that don't meet that requirement without going into the individual clusters looking for matches. This means that we are likely to miss some good matches along the way since we wont investigate clusters that just miss the cutoff. A (planned) patch for this behavior would be to also search clusters that 'just' miss this cutoff. 
 
 ## Further Information
 http://nlp.stanford.edu/IR-book/html/htmledition/cluster-pruning-1.html
